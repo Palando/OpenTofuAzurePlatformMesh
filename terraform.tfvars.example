@@ -1,0 +1,14 @@
+subscription_id = "DEINE-AZURE-ABONNEMENT-ID"
+
+# Inhalt der .pub-Datei, NICHT der privaten .pem-Datei:
+ssh_public_key = "ssh-ed25519 HIER-DEN-OEFFENTLICHEN-KEY-EINTRAGEN dein-name"
+
+# Deine öffentliche IPv4-Adresse (bei VPN: dessen öffentliche Ausgangsadresse):
+ssh_allowed_cidr = "203.0.113.10/32"
+
+vm_name        = "vm-fedora-dev"
+admin_username = "azureuser"
+location       = "eastus"
+zone           = "1"
+vm_size        = "Standard_D2as_v7"
+image_version  = "44.20261105.0"

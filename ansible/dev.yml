@@ -1,0 +1,189 @@
+---
+- name: Fedora-Entwicklungsumgebung einrichten
+  hosts: dev
+  become: true
+  gather_facts: false
+  vars_files:
+    - settings.yml
+  pre_tasks:
+    - name: Auf SSH und Python warten
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 5
+    - name: Cloud-init abschließen lassen
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+    - name: Systeminformationen laden
+      ansible.builtin.setup:
+    - name: Fedora x64 voraussetzen
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Fedora'
+          - ansible_facts['architecture'] == 'x86_64'
+  tasks:
+    - name: Werkzeuge aus Fedora installieren
+      ansible.builtin.dnf:
+        name:
+          - docker
+          - kind
+          - git
+          - k9s
+          - helm
+          - mkcert
+          - yq
+          - wget
+          - curl
+          - vim
+          - tmux
+          - htop
+          - kubernetes1.37-client
+        state: present
+        update_cache: true
+
+    - name: Docker starten und beim Booten aktivieren
+      ansible.builtin.systemd_service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: SSH-Benutzer zur Docker-Gruppe hinzufügen
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    - name: Download-Verzeichnis erstellen
+      ansible.builtin.file:
+        path: /var/cache/dev-bootstrap
+        state: directory
+        mode: '0755'
+
+    - name: Go-Archiv mit Herstellerprüfsumme herunterladen
+      ansible.builtin.get_url:
+        url: "https://go.dev/dl/go{{ go_version }}.linux-amd64.tar.gz"
+        dest: "/var/cache/dev-bootstrap/go{{ go_version }}.linux-amd64.tar.gz"
+        mode: '0644'
+
+    - name: Go versionsweise entpacken
+      ansible.builtin.unarchive:
+        src: "/var/cache/dev-bootstrap/go{{ go_version }}.linux-amd64.tar.gz"
+        dest: /opt
+        remote_src: true
+        extra_opts:
+          - "--transform=s,^go,go-{{ go_version }},"
+        creates: "/opt/go-{{ go_version }}/bin/go"
+
+    - name: Go-Pfad prüfen
+      ansible.builtin.stat:
+        path: /usr/local/go
+      register: existing_go
+    - name: Vorhandene manuelle Go-Installation nicht überschreiben
+      ansible.builtin.assert:
+        that: not existing_go.stat.exists or existing_go.stat.islnk
+        fail_msg: '/usr/local/go ist bereits ein echtes Verzeichnis. Vor einem Wechsel manuell sichern/verschieben.'
+    - name: Go unter dem gewohnten Pfad verfügbar machen
+      ansible.builtin.file:
+        src: "/opt/go-{{ go_version }}"
+        dest: /usr/local/go
+        state: link
+
+    - name: Task-Archiv mit Release-Prüfsumme herunterladen
+      ansible.builtin.get_url:
+        url: "https://github.com/go-task/task/releases/download/{{ task_release }}/task_linux_amd64.tar.gz"
+        dest: /var/cache/dev-bootstrap/task_linux_amd64.tar.gz
+        checksum: "sha256:https://github.com/go-task/task/releases/download/{{ task_release }}/task_checksums.txt"
+        mode: '0644'
+      register: task_archive
+
+    - name: Vorhandene Tilt-Installation prüfen
+      ansible.builtin.command: /usr/local/bin/tilt version
+      register: tilt_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Tilt mit offiziellem Installer einrichten
+      when: tilt_installed.rc != 0 or not (tilt_installed.stdout is match('^v[0-9]+\.[0-9]+\.[0-9]+'))
+      block:
+        - name: Offizielles Tilt-Installationsskript herunterladen
+          ansible.builtin.get_url:
+            url: https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh
+            dest: /var/cache/dev-bootstrap/install-tilt.sh
+            mode: '0644'
+
+        - name: Tilt-Installer ausführen
+          ansible.builtin.command: /bin/bash /var/cache/dev-bootstrap/install-tilt.sh
+          environment:
+            HOME: /root
+            PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+          changed_when: true
+
+    - name: Tilt nach Installation prüfen
+      ansible.builtin.command: /usr/local/bin/tilt version
+      changed_when: false
+
+    - name: Go-Archiv mit Herstellerprüfsumme herunterladen
+      ansible.builtin.get_url:
+        url: "https://go.dev/dl/go{{ go_version }}.linux-amd64.tar.gz"
+        dest: "/var/cache/dev-bootstrap/go{{ go_version }}.linux-amd64.tar.gz"
+        mode: '0644'
+
+    - name: Task temporär entpacken
+      ansible.builtin.unarchive:
+        src: /var/cache/dev-bootstrap/task_linux_amd64.tar.gz
+        dest: /var/cache/dev-bootstrap
+        remote_src: true
+        include: [task]
+
+    - name: Task unter /usr/local/bin installieren
+      ansible.builtin.copy:
+        src: /var/cache/dev-bootstrap/task
+        dest: /usr/local/bin/task
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: PATH für Login-Shells setzen
+      ansible.builtin.copy:
+        dest: /etc/profile.d/dev-tools.sh
+        mode: '0644'
+        content: |
+          export PATH="/usr/local/bin:/usr/local/go/bin:$PATH"
+
+    - name: Home-Verzeichnis des SSH-Benutzers ermitteln
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ ansible_user }}"
+
+    - name: PATH auch für interaktive Bash-Shells setzen
+      ansible.builtin.blockinfile:
+        path: "{{ item }}"
+        create: true
+        mode: '0644'
+        marker: '# {mark} ANSIBLE DEV TOOLS'
+        block: 'export PATH="/usr/local/bin:/usr/local/go/bin:$PATH"'
+      loop:
+        - /root/.bashrc
+        - "{{ ansible_facts.getent_passwd[ansible_user][4] }}/.bashrc"
+
+    - name: Optional Platform Mesh klonen ohne spätere lokale Änderungen zurückzusetzen
+      ansible.builtin.git:
+        repo: https://github.com/platform-mesh/platform-mesh.git
+        dest: "{{ ansible_facts.getent_passwd[ansible_user][4] }}/platform-mesh"
+        version: "{{ platform_mesh_ref }}"
+        update: false
+      become_user: "{{ ansible_user }}"
+      when: clone_platform_mesh | bool
+
+    - name: Installierte Werkzeuge prüfen
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      changed_when: false
+      loop:
+        - [docker, --version]
+        - [kind, version]
+        - [kubectl, version, --client]
+        - [tilt, version]
+        - [helm, version, --short]
+        - [/usr/local/bin/task, --version]
+        - [/usr/local/go/bin/go, version]

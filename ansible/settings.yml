@@ -1,0 +1,8 @@
+---
+# Aus deinem Screenshot übernommen.
+go_version: '1.27.3'
+# Nightly ist absichtlich veränderlich; für feste Builds einen Release-Tag setzen.
+task_release: nightly
+# Im Screenshot wurde das Repository am Ende gelöscht. Deshalb optional.
+clone_platform_mesh: false
+platform_mesh_ref: HEAD
