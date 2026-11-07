@@ -25,7 +25,6 @@
       ansible.builtin.dnf:
         name:
           - docker
-          - kind
           - git
           - k9s
           - helm
@@ -77,15 +76,27 @@
       ansible.builtin.stat:
         path: /usr/local/go
       register: existing_go
+
     - name: Vorhandene manuelle Go-Installation nicht überschreiben
       ansible.builtin.assert:
         that: not existing_go.stat.exists or existing_go.stat.islnk
         fail_msg: '/usr/local/go ist bereits ein echtes Verzeichnis. Vor einem Wechsel manuell sichern/verschieben.'
+
     - name: Go unter dem gewohnten Pfad verfügbar machen
       ansible.builtin.file:
         src: "/opt/go-{{ go_version }}"
         dest: /usr/local/go
         state: link
+
+    - name: kind v0.33.0 installieren (amd64)
+      become: true
+      ansible.builtin.get_url:
+        url: https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
+        dest: /usr/local/bin/kind
+        owner: root
+        group: root
+        mode: "0755"
+        force: true
 
     - name: Task-Archiv mit Release-Prüfsumme herunterladen
       ansible.builtin.get_url:
@@ -187,3 +198,36 @@
         - [helm, version, --short]
         - [/usr/local/bin/task, --version]
         - [/usr/local/go/bin/go, version]
+
+    - name: inotify-Limits für fsnotify erhöhen
+      become: true
+      block:
+        - name: Aktuelle inotify-Limits lesen
+          ansible.builtin.command:
+            argv:
+              - sysctl
+              - -n
+              - "{{ item }}"
+          loop:
+            - fs.inotify.max_user_instances
+            - fs.inotify.max_user_watches
+          register: inotify_limits
+          changed_when: false
+          check_mode: false
+
+    - name: inotify-Limits dauerhaft konfigurieren und sofort anwenden
+      ansible.posix.sysctl:
+        name: "{{ item.item }}"
+        value: >-
+          {{ [item.stdout | int, inotify_minimums[item.item]] | max }}
+        sysctl_file: /etc/sysctl.d/90-inotify.conf
+        state: present
+        sysctl_set: true
+        reload: true
+      loop: "{{ inotify_limits.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      vars:
+        inotify_minimums:
+          fs.inotify.max_user_instances: 1024
+          fs.inotify.max_user_watches: 524288

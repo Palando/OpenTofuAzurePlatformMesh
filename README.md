@@ -13,6 +13,20 @@ Erstellt eine neue, eigenständige Entwicklungs-VM. Die vorhandene VM `vm-sg-001
 - Eigene Ressourcengruppe, VNet, Subnetz, Netzwerkkarte, Standard Public IP und Firewallregel für SSH
 - SSH-Key-Anmeldung, keine Passwortanmeldung
 
+## Voruassetzungen
+
+- Azure CLI
+- Python 3
+- OpenTofu
+
+## Tldr
+
+- terraform.tfvars anlegen
+- Python venv erstellen
+- Ansible darin installieren
+- in Azure einloggen, SID konfigurieren
+- tofu aufrufen
+
 ## 1. Einstellungen
 
 Voraussetzungen: OpenTofu und Azure CLI. Befehle in diesem Ordner ausführen.
@@ -132,6 +146,7 @@ Python 3, OpenSSH und Ansible müssen auf dem Rechner installiert sein, auf dem 
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install 'ansible-core>=2.20,<2.22'
+ansible-galaxy collection install ansible.posix
 ansible-playbook --version
 ```
 
